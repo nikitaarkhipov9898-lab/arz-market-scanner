@@ -7,20 +7,17 @@
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let stopped = false;
   let running = false;
-  let results = new Map();
-  let errors = [];
 
   const panel = document.createElement('div');
   panel.id = 'arz-scanner-panel';
   panel.style.cssText = 'position:fixed;z-index:999999;top:12px;left:3%;width:94%;max-width:440px;background:#111827;color:white;padding:16px;border:1px solid #3978f6;border-radius:14px;font:14px Arial;box-shadow:0 5px 30px #0009;max-height:85vh;overflow:auto';
 
   panel.innerHTML = `
-    <div style="font-size:20px;font-weight:bold">ARZ MARKET SCANNER PRO</div>
-    <div style="color:#9ca3af;margin:8px 0">Vice-City · Полный сбор рынка</div>
+    <div style="font-size:20px;font-weight:bold">ARZ SCANNER: РАЗВЕДКА</div>
+    <div style="color:#9ca3af;margin:8px 0">Режим: Только раскрытие страницы</div>
     <div id="arz-status" style="padding:12px;background:#202b40;border-radius:8px;line-height:1.6">Готов к запуску</div>
-    <button id="arz-start" style="width:100%;padding:13px;margin-top:10px;background:#2878ed;color:white;border:0;border-radius:8px;font-weight:bold">НАЧАТЬ СКАНИРОВАНИЕ</button>
+    <button id="arz-start" style="width:100%;padding:13px;margin-top:10px;background:#2878ed;color:white;border:0;border-radius:8px;font-weight:bold">НАЧАТЬ РАСКРЫТИЕ</button>
     <button id="arz-stop" style="width:100%;padding:11px;margin-top:7px;background:#9b3434;color:white;border:0;border-radius:8px">ОСТАНОВИТЬ</button>
-    <button id="arz-download" style="width:100%;padding:11px;margin-top:7px;background:#16834e;color:white;border:0;border-radius:8px" disabled>СКАЧАТЬ JSON</button>
     <button id="arz-close" style="width:100%;padding:9px;margin-top:7px;background:#374151;color:white;border:0;border-radius:8px">ЗАКРЫТЬ ПАНЕЛЬ</button>
   `;
 
@@ -28,186 +25,67 @@
 
   const status = panel.querySelector('#arz-status');
   const start = panel.querySelector('#arz-start');
-  const download = panel.querySelector('#arz-download');
 
-  function getCards() {
-    return [...document.querySelectorAll('main .card')];
-  }
-
-  function getItem(card) {
-    const link = card.querySelector('.title a.name');
-    if (!link) return null;
-    const href = link.getAttribute('href') || '';
-    const id = href.match(/\/items\/(\d+)/)?.[1];
-    if (!id) return null;
-    return { id, name: link.innerText.trim(), href };
-  }
-
-  async function expandCard(id) {
-    let card = getCards().find(c => getItem(c)?.id === id);
-    if (!card) return null;
-
-    for (let i = 0; i < 100; i++) {
-      const button = card.querySelector('.more button');
-      if (!button || !button.innerText.includes('Ещё')) break;
-      button.click();
-      await sleep(100); // Пауза 100мс
-      card = getCards().find(c => getItem(c)?.id === id);
-      if (!card) break;
-    }
-    return getCards().find(c => getItem(c)?.id === id) || null;
-  }
-
-  function readCard(card) {
-    const item = getItem(card);
-    if (!item) return null;
-    const shown = card.querySelector('.more > span')?.innerText.trim() || '';
-    const expected = shown.match(/из\s*(\d+)/i);
-    const offers = [];
-
-    for (const offer of card.querySelectorAll('.offers li.offer')) {
-      const raw = offer.innerText.trim();
-      const priceMatch = raw.match(/([\d\s\u00a0\u202f]+)\s*VC\$/i);
-      const quantityMatch = raw.match(/([\d\s\u00a0\u202f]+)\s*шт/i);
-      if (!priceMatch) continue;
-      offers.push({
-        player: offer.querySelector('.player')?.innerText.trim() || '',
-        stall: offer.querySelector('.lavka')?.innerText.trim() || '',
-        price: Number(priceMatch[1].replace(/\D/g, '')),
-        quantity: quantityMatch ? Number(quantityMatch[1].replace(/\D/g, '')) : null,
-        raw
-      });
-    }
-    offers.sort((a, b) => a.price - b.price);
-    return {
-      ...item, shown,
-      expectedOffers: expected ? Number(expected[1]) : null,
-      offersCount: offers.length,
-      complete: expected ? offers.length === Number(expected[1]) : null,
-      offers
-    };
-  }
-
-  // ЖЕСТКАЯ ОЧИСТКА: удаляем карточку из HTML полностью
-  function removeCardFromDOM(id) {
-      const card = getCards().find(c => getItem(c)?.id === id);
-      if (card) {
-          card.remove(); // Стираем из памяти навсегда
-      }
+  function getCardsCount() {
+    return document.querySelectorAll('main .card').length;
   }
 
   function updateStatus(message) {
-    status.innerText = message +
-      '\n\nТоваров собрано: ' + results.size +
-      '\nОбъявлений собрано: ' + [...results.values()].reduce((n, x) => n + x.offersCount, 0) +
-      '\nОшибок: ' + errors.length;
+    status.innerText = message;
   }
 
   async function scan() {
     if (running) return;
     running = true;
     stopped = false;
-    results.clear();
-    errors = [];
-    download.disabled = true;
     start.disabled = true;
 
+    let page = 1;
+
     try {
-      let unchangedPages = 0;
+      while (!stopped) {
+        const countBefore = getCardsCount();
+        updateStatus(`Страница ${page}: загружено ${countBefore} товаров...`);
 
-      for (let page = 1; page <= 300; page++) {
-        if (stopped) break;
-        
-        let cards = getCards();
-        if (!cards.length) {
-          errors.push('На странице не найдены карточки main .card');
-          break;
-        }
-        
-        const ids = cards.map(c => getItem(c)?.id).filter(Boolean);
-        updateStatus('Страница ' + page + ': обработка ' + ids.length + ' карточек');
+        // Плавный скролл вниз, чтобы браузер "проснулся"
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        await sleep(500); 
 
-        for (let i = 0; i < ids.length; i++) {
-          if (stopped) break;
-          const id = ids[i];
-          try {
-            const card = await expandCard(id);
-            if (!card) { errors.push('Не найдена карточка ID ' + id); continue; }
-            const data = readCard(card);
-            if (data) results.set(id, data);
-            
-            // УДАЛЯЕМ КАРТОЧКУ ИЗ DOM
-            removeCardFromDOM(id);
-
-            updateStatus('Страница ' + page + ': товар ' + (i + 1) + ' из ' + ids.length + '\n(Карточка удалена из памяти)');
-          } catch (e) {
-            errors.push('Товар ID ' + id + ': ' + String(e));
-          }
-        }
-
-        if (stopped) break;
-
-        // Логика загрузки следующей страницы
-        const before = new Set(getCards().map(c => getItem(c)?.id).filter(Boolean));
         const moreButton = document.querySelector('main .page-more button');
 
-        if (!moreButton || moreButton.disabled) break;
-        
-        moreButton.click();
-        updateStatus('Загружаем следующую порцию товаров...');
-        
-        let added = [];
-        for (let waitTry = 0; waitTry < 15; waitTry++) {
-            await sleep(200); 
-            const after = getCards().map(c => getItem(c)?.id).filter(Boolean);
-            added = after.filter(id => !before.has(id));
-            if (added.length > 0) break; 
-        }
-
-        if (!added.length) unchangedPages++;
-        else unchangedPages = 0;
-
-        if (unchangedPages >= 3) {
-          errors.push('Остановка: 3 попытки загрузки не добавили новые товары');
+        if (!moreButton || moreButton.disabled) {
+          updateStatus(`Конец! Больше нет кнопки "Показать еще".\nВсего загружено: ${countBefore} товаров.`);
           break;
         }
+
+        moreButton.click();
+        updateStatus(`Страница ${page}: нажимаю "Показать еще"...`);
+        
+        // Ждем, пока загрузятся новые карточки (максимум 3 секунды)
+        let added = false;
+        for (let waitTry = 0; waitTry < 15; waitTry++) {
+            await sleep(200); 
+            if (getCardsCount() > countBefore) {
+                added = true;
+                break;
+            }
+        }
+
+        if (!added) {
+            updateStatus(`Страница ${page}: сайт не дал новые товары. Ждем еще 3 сек...`);
+            await sleep(3000); // Даем сайту больше времени
+            if (getCardsCount() === countBefore) {
+                updateStatus(`Остановка. Сайт перестал грузить товары.\nВсего: ${countBefore} шт.`);
+                break;
+            }
+        }
+
+        page++;
+        // Небольшая пауза между страницами, чтобы не быть роботом
+        await sleep(1000); 
       }
-
-      const data = {
-        scanner: 'ARZ MARKET SCANNER PRO',
-        server: 'Vice-City',
-        serverId: new URL(location.href).searchParams.get('server'),
-        scannedAt: new Date().toISOString(),
-        source: location.href,
-        totalProducts: results.size,
-        totalOffers: [...results.values()].reduce((n, x) => n + x.offersCount, 0),
-        incompleteProducts: [...results.values()].filter(x => x.complete === false).map(x => ({id:x.id,name:x.name,shown:x.shown,count:x.offersCount,expected:x.expectedOffers})),
-        errors,
-        products: [...results.values()]
-      };
-
-      window.arzMarketScanResult = data;
-
-      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
-      const url = URL.createObjectURL(blob);
-      download.onclick = () => {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'ARZ_VICE_CITY_' + new Date().toISOString().replace(/[:.]/g,'-') + '.json';
-        a.click();
-      };
-      download.disabled = false;
-
-      updateStatus(
-        (stopped ? 'Сканирование остановлено' : 'Сканирование завершено') +
-        '\nТоваров: ' + data.totalProducts +
-        '\nОбъявлений: ' + data.totalOffers +
-        '\nНеполных карточек: ' + data.incompleteProducts.length
-      );
-
     } catch (e) {
-      errors.push(String(e));
-      updateStatus('Ошибка сканирования: ' + String(e));
+      updateStatus('Ошибка: ' + String(e));
     } finally {
       running = false;
       start.disabled = false;
@@ -215,11 +93,11 @@
   }
 
   start.onclick = scan;
-  panel.querySelector('#arz-stop').onclick = () => { stopped = true; updateStatus('Останавливаем сканирование...'); };
+  panel.querySelector('#arz-stop').onclick = () => { stopped = true; updateStatus('Остановка...'); };
   panel.querySelector('#arz-close').onclick = () => {
     if (running) { alert('Сначала останови сканирование'); return; }
     panel.remove();
   };
 
-  updateStatus('Панель готова. Открой рынок Vice-City и нажми запуск.');
+  updateStatus('Панель готова. Открой рынок и нажми запуск.');
 })();
