@@ -1,4 +1,3 @@
-
 (() => {
   if (document.getElementById('arz-scanner-panel')) {
     alert('ARZ SCANNER уже запущен');
@@ -32,22 +31,17 @@
   const download = panel.querySelector('#arz-download');
 
   function getCards() {
+    // Ищем только видимые карточки, чтобы не тратить время на скрытые
     return [...document.querySelectorAll('main .card')];
   }
 
   function getItem(card) {
     const link = card.querySelector('.title a.name');
     if (!link) return null;
-
     const href = link.getAttribute('href') || '';
     const id = href.match(/\/items\/(\d+)/)?.[1];
     if (!id) return null;
-
-    return {
-      id,
-      name: link.innerText.trim(),
-      href
-    };
+    return { id, name: link.innerText.trim(), href };
   }
 
   async function expandCard(id) {
@@ -57,21 +51,17 @@
     for (let i = 0; i < 100; i++) {
       const button = card.querySelector('.more button');
       if (!button || !button.innerText.includes('Ещё')) break;
-
       button.click();
-      await sleep(350);
-
+      await sleep(100); // Еще быстрее (100мс)
       card = getCards().find(c => getItem(c)?.id === id);
       if (!card) break;
     }
-
     return getCards().find(c => getItem(c)?.id === id) || null;
   }
 
   function readCard(card) {
     const item = getItem(card);
     if (!item) return null;
-
     const shown = card.querySelector('.more > span')?.innerText.trim() || '';
     const expected = shown.match(/из\s*(\d+)/i);
     const offers = [];
@@ -80,25 +70,18 @@
       const raw = offer.innerText.trim();
       const priceMatch = raw.match(/([\d\s\u00a0\u202f]+)\s*VC\$/i);
       const quantityMatch = raw.match(/([\d\s\u00a0\u202f]+)\s*шт/i);
-
       if (!priceMatch) continue;
-
       offers.push({
         player: offer.querySelector('.player')?.innerText.trim() || '',
         stall: offer.querySelector('.lavka')?.innerText.trim() || '',
         price: Number(priceMatch[1].replace(/\D/g, '')),
-        quantity: quantityMatch
-          ? Number(quantityMatch[1].replace(/\D/g, ''))
-          : null,
+        quantity: quantityMatch ? Number(quantityMatch[1].replace(/\D/g, '')) : null,
         raw
       });
     }
-
     offers.sort((a, b) => a.price - b.price);
-
     return {
-      ...item,
-      shown,
+      ...item, shown,
       expectedOffers: expected ? Number(expected[1]) : null,
       offersCount: offers.length,
       complete: expected ? offers.length === Number(expected[1]) : null,
@@ -106,11 +89,19 @@
     };
   }
 
+  // НОВАЯ ФУНКЦИЯ: Убираем карточку из DOM, чтобы браузер не тормозил
+  function removeCardFromDOM(id) {
+      const card = getCards().find(c => getItem(c)?.id === id);
+      if (card) {
+          card.style.display = 'none'; // Просто скрываем, это безопаснее чем удалять
+          // Или можно использовать card.remove(); если скрытие не помогает
+      }
+  }
+
   function updateStatus(message) {
     status.innerText = message +
       '\n\nТоваров собрано: ' + results.size +
-      '\nОбъявлений собрано: ' +
-      [...results.values()].reduce((n, x) => n + x.offersCount, 0) +
+      '\nОбъявлений собрано: ' + [...results.values()].reduce((n, x) => n + x.offersCount, 0) +
       '\nОшибок: ' + errors.length;
   }
 
@@ -126,32 +117,29 @@
     try {
       let unchangedPages = 0;
 
-      for (let page = 1; page <= 100; page++) {
+      for (let page = 1; page <= 300; page++) {
         if (stopped) break;
-
         let cards = getCards();
         if (!cards.length) {
           errors.push('На странице не найдены карточки main .card');
           break;
         }
-
         const ids = cards.map(c => getItem(c)?.id).filter(Boolean);
         updateStatus('Страница ' + page + ': обработка ' + ids.length + ' карточек');
 
         for (let i = 0; i < ids.length; i++) {
           if (stopped) break;
-
           const id = ids[i];
           try {
             const card = await expandCard(id);
-            if (!card) {
-              errors.push('Не найдена карточка ID ' + id);
-              continue;
-            }
-
+            if (!card) { errors.push('Не найдена карточка ID ' + id); continue; }
             const data = readCard(card);
             if (data) results.set(id, data);
-            updateStatus('Страница ' + page + ': товар ' + (i + 1) + ' из ' + ids.length);
+            
+            // ВОТ ТУТ МЫ ОЧИЩАЕМ ПАМЯТЬ
+            removeCardFromDOM(id);
+
+            updateStatus('Страница ' + page + ': товар ' + (i + 1) + ' из ' + ids.length + '\n(Память очищается...)');
           } catch (e) {
             errors.push('Товар ID ' + id + ': ' + String(e));
           }
@@ -159,26 +147,27 @@
 
         if (stopped) break;
 
-        const before = new Set(
-          getCards().map(c => getItem(c)?.id).filter(Boolean)
-        );
-
+        const before = new Set(getCards().map(c => getItem(c)?.id).filter(Boolean));
         const moreButton = document.querySelector('main .page-more button');
 
         if (!moreButton || moreButton.disabled) break;
-
+        
         moreButton.click();
         updateStatus('Загружаем следующую порцию товаров...');
-        await sleep(1800);
-
-        const after = getCards().map(c => getItem(c)?.id).filter(Boolean);
-        const added = after.filter(id => !before.has(id));
+        
+        let added = [];
+        for (let waitTry = 0; waitTry < 15; waitTry++) {
+            await sleep(200); 
+            const after = getCards().map(c => getItem(c)?.id).filter(Boolean);
+            added = after.filter(id => !before.has(id));
+            if (added.length > 0) break; 
+        }
 
         if (!added.length) unchangedPages++;
         else unchangedPages = 0;
 
-        if (unchangedPages >= 2) {
-          errors.push('Остановка: две попытки загрузки не добавили новые товары');
+        if (unchangedPages >= 3) {
+          errors.push('Остановка: 3 попытки загрузки не добавили новые товары');
           break;
         }
       }
@@ -191,25 +180,19 @@
         source: location.href,
         totalProducts: results.size,
         totalOffers: [...results.values()].reduce((n, x) => n + x.offersCount, 0),
-        incompleteProducts: [...results.values()]
-          .filter(x => x.complete === false)
-          .map(x => ({id:x.id,name:x.name,shown:x.shown,count:x.offersCount,expected:x.expectedOffers})),
+        incompleteProducts: [...results.values()].filter(x => x.complete === false).map(x => ({id:x.id,name:x.name,shown:x.shown,count:x.offersCount,expected:x.expectedOffers})),
         errors,
         products: [...results.values()]
       };
 
       window.arzMarketScanResult = data;
 
-      const blob = new Blob(
-        [JSON.stringify(data, null, 2)],
-        {type:'application/json'}
-      );
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
       const url = URL.createObjectURL(blob);
       download.onclick = () => {
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'ARZ_VICE_CITY_' +
-          new Date().toISOString().replace(/[:.]/g,'-') + '.json';
+        a.download = 'ARZ_VICE_CITY_' + new Date().toISOString().replace(/[:.]/g,'-') + '.json';
         a.click();
       };
       download.disabled = false;
@@ -231,15 +214,9 @@
   }
 
   start.onclick = scan;
-  panel.querySelector('#arz-stop').onclick = () => {
-    stopped = true;
-    updateStatus('Останавливаем сканирование...');
-  };
+  panel.querySelector('#arz-stop').onclick = () => { stopped = true; updateStatus('Останавливаем сканирование...'); };
   panel.querySelector('#arz-close').onclick = () => {
-    if (running) {
-      alert('Сначала останови сканирование');
-      return;
-    }
+    if (running) { alert('Сначала останови сканирование'); return; }
     panel.remove();
   };
 
