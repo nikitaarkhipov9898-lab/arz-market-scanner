@@ -31,7 +31,6 @@
   const download = panel.querySelector('#arz-download');
 
   function getCards() {
-    // Ищем только видимые карточки, чтобы не тратить время на скрытые
     return [...document.querySelectorAll('main .card')];
   }
 
@@ -52,7 +51,7 @@
       const button = card.querySelector('.more button');
       if (!button || !button.innerText.includes('Ещё')) break;
       button.click();
-      await sleep(100); // Еще быстрее (100мс)
+      await sleep(100); // Пауза 100мс
       card = getCards().find(c => getItem(c)?.id === id);
       if (!card) break;
     }
@@ -89,12 +88,11 @@
     };
   }
 
-  // НОВАЯ ФУНКЦИЯ: Убираем карточку из DOM, чтобы браузер не тормозил
+  // ЖЕСТКАЯ ОЧИСТКА: удаляем карточку из HTML полностью
   function removeCardFromDOM(id) {
       const card = getCards().find(c => getItem(c)?.id === id);
       if (card) {
-          card.style.display = 'none'; // Просто скрываем, это безопаснее чем удалять
-          // Или можно использовать card.remove(); если скрытие не помогает
+          card.remove(); // Стираем из памяти навсегда
       }
   }
 
@@ -119,11 +117,13 @@
 
       for (let page = 1; page <= 300; page++) {
         if (stopped) break;
+        
         let cards = getCards();
         if (!cards.length) {
           errors.push('На странице не найдены карточки main .card');
           break;
         }
+        
         const ids = cards.map(c => getItem(c)?.id).filter(Boolean);
         updateStatus('Страница ' + page + ': обработка ' + ids.length + ' карточек');
 
@@ -136,10 +136,10 @@
             const data = readCard(card);
             if (data) results.set(id, data);
             
-            // ВОТ ТУТ МЫ ОЧИЩАЕМ ПАМЯТЬ
+            // УДАЛЯЕМ КАРТОЧКУ ИЗ DOM
             removeCardFromDOM(id);
 
-            updateStatus('Страница ' + page + ': товар ' + (i + 1) + ' из ' + ids.length + '\n(Память очищается...)');
+            updateStatus('Страница ' + page + ': товар ' + (i + 1) + ' из ' + ids.length + '\n(Карточка удалена из памяти)');
           } catch (e) {
             errors.push('Товар ID ' + id + ': ' + String(e));
           }
@@ -147,6 +147,7 @@
 
         if (stopped) break;
 
+        // Логика загрузки следующей страницы
         const before = new Set(getCards().map(c => getItem(c)?.id).filter(Boolean));
         const moreButton = document.querySelector('main .page-more button');
 
